@@ -12,7 +12,7 @@ Model name is converted to lowercase for the collection name:
 """
 
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 
 # Example schemas (replace with your own):
 
@@ -37,6 +37,31 @@ class Product(BaseModel):
     price: float = Field(..., ge=0, description="Price in dollars")
     category: str = Field(..., description="Product category")
     in_stock: bool = Field(True, description="Whether product is in stock")
+
+# Task schema for Studdy MVP
+class Task(BaseModel):
+    """
+    Tasks/Assignments schema
+    Collection name: "task"
+    """
+    title: str = Field(..., description="Task title or assignment name")
+    subject: Optional[str] = Field(None, description="Subject or course")
+    due_date: Optional[str] = Field(None, description="ISO date string for due date")
+    priority: Optional[str] = Field(None, description="low | medium | high")
+    notes: Optional[str] = Field(None, description="Additional notes")
+    is_completed: bool = Field(False, description="Completion status")
+
+class StudyMaterial(BaseModel):
+    """
+    Uploaded study material metadata
+    Collection name: "studymaterial"
+    """
+    title: str
+    type: str = Field(..., description="text | pdf | image | audio")
+    language: Optional[str] = None
+    source: Optional[str] = None
+    url: Optional[str] = None
+    tags: Optional[List[str]] = None
 
 # Add your own schemas here:
 # --------------------------------------------------

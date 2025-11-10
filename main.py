@@ -1,8 +1,13 @@
 import os
-from fastapi import FastAPI
+from typing import List, Optional
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
 
-app = FastAPI()
+from database import db, create_document, get_documents
+from schemas import Task, StudyMaterial
+
+app = FastAPI(title="Idlely Studdy API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -12,57 +17,125 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.get("/")
 def read_root():
-    return {"message": "Hello from FastAPI Backend!"}
+    return {"message": "Idlely Studdy Backend is running"}
 
-@app.get("/api/hello")
-def hello():
-    return {"message": "Hello from the backend API!"}
 
-@app.get("/test")
+# --- Health and schema helpers ---
+class Health(BaseModel):
+    backend: str
+    database: str
+    database_url: Optional[str]
+    database_name: Optional[str]
+    connection_status: str
+    collections: List[str]
+
+
+@app.get("/test", response_model=Health)
 def test_database():
-    """Test endpoint to check if database is available and accessible"""
-    response = {
-        "backend": "✅ Running",
-        "database": "❌ Not Available",
-        "database_url": None,
-        "database_name": None,
-        "connection_status": "Not Connected",
-        "collections": []
-    }
-    
+    response = Health(
+        backend="✅ Running",
+        database="❌ Not Available",
+        database_url=None,
+        database_name=None,
+        connection_status="Not Connected",
+        collections=[],
+    )
+
     try:
-        # Try to import database module
-        from database import db
-        
         if db is not None:
-            response["database"] = "✅ Available"
-            response["database_url"] = "✅ Configured"
-            response["database_name"] = db.name if hasattr(db, 'name') else "✅ Connected"
-            response["connection_status"] = "Connected"
-            
-            # Try to list collections to verify connectivity
+            response.database = "✅ Available"
+            response.database_url = "✅ Configured"
+            response.database_name = getattr(db, "name", "✅ Connected")
+            response.connection_status = "Connected"
             try:
                 collections = db.list_collection_names()
-                response["collections"] = collections[:10]  # Show first 10 collections
-                response["database"] = "✅ Connected & Working"
+                response.collections = collections[:10]
+                response.database = "✅ Connected & Working"
             except Exception as e:
-                response["database"] = f"⚠️  Connected but Error: {str(e)[:50]}"
+                response.database = f"⚠️  Connected but Error: {str(e)[:50]}"
         else:
-            response["database"] = "⚠️  Available but not initialized"
-            
-    except ImportError:
-        response["database"] = "❌ Database module not found (run enable-database first)"
+            response.database = "⚠️  Available but not initialized"
     except Exception as e:
-        response["database"] = f"❌ Error: {str(e)[:50]}"
-    
-    # Check environment variables
-    import os
-    response["database_url"] = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
-    response["database_name"] = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
-    
+        response.database = f"❌ Error: {str(e)[:50]}"
+
+    response.database_url = "✅ Set" if os.getenv("DATABASE_URL") else "❌ Not Set"
+    response.database_name = "✅ Set" if os.getenv("DATABASE_NAME") else "❌ Not Set"
     return response
+
+
+# --- Minimal task endpoints (DB-backed) ---
+@app.post("/api/tasks", status_code=201)
+async def create_task(task: Task):
+    try:
+        inserted_id = create_document("task", task)
+        return {"id": inserted_id, "ok": True}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tasks")
+async def list_tasks(subject: Optional[str] = None, completed: Optional[bool] = None):
+    filter_dict = {}
+    if subject:
+        filter_dict["subject"] = subject
+    if completed is not None:
+        filter_dict["is_completed"] = completed
+    try:
+        docs = get_documents("task", filter_dict=filter_dict)
+        # Convert ObjectId for JSON if needed
+        for d in docs:
+            if "_id" in d:
+                d["id"] = str(d.pop("_id"))
+        return {"items": docs}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# --- Studdy parse stub ---
+class ParseRequest(BaseModel):
+    text: Optional[str] = None
+    language: Optional[str] = None
+
+
+@app.post("/api/studdy/parse")
+async def parse_content(payload: ParseRequest):
+    """
+    Minimal placeholder that extracts simple tasks from text using heuristic rules.
+    This can later be upgraded to call Gemini/Claude.
+    """
+    text = (payload.text or "").strip()
+    if not text:
+        return {"tasks": []}
+
+    # Heuristic: lines that contain a date keyword and verb look like tasks
+    keywords = ["due", "deadline", "submit", "exam", "quiz", "assignment"]
+    lines = [l.strip("- •* ") for l in text.splitlines() if l.strip()]
+    tasks = []
+    for line in lines:
+        if any(k in line.lower() for k in keywords):
+            tasks.append({
+                "title": line[:120],
+                "priority": "medium",
+            })
+    if not tasks:
+        tasks = [{"title": lines[0][:120], "priority": "low"}] if lines else []
+    return {"tasks": tasks}
+
+
+# --- Schema endpoint for viewer/tools ---
+@app.get("/schema")
+def get_schema():
+    return {
+        "collections": [
+            "user",
+            "product",
+            "task",
+            "studymaterial",
+        ]
+    }
 
 
 if __name__ == "__main__":
